@@ -48,12 +48,16 @@ iOS 侧**没有任何第三方依赖**（不用 CocoaPods / SPM），Xcode 打�
 
 ## 2. 出 IPA（不用 Mac）
 
-仓库带了一个 GitHub Actions 工作流 `.github/workflows/build-ipa.yml`，每次 push 到 `main` 自动在 `macos-14` 上：
+仓库带了一个 GitHub Actions 工作流 `.github/workflows/build-ipa.yml`，每次 push 到 `main` 自动在 `macos-15` 上：
 
 1. `brew install xcodegen` → `xcodegen generate` 生成 `DroidBox.xcodeproj`
 2. `xcodebuild ... CODE_SIGNING_ALLOWED=NO` 编 Release（arm64）
 3. 打成 `Payload/DroidBox.app` → `zip` → **`DroidBox-unsigned.ipa`**
 4. 作为 artifact 上传
+
+> ⚠️ 两个踩过的坑：
+> - runner **必须写 `macos-15`**。GitHub 已下架 `macos-14` 镜像，继续用它的表现是「job 1 秒 cancelled、`runner_name` 为空、一个 step 都不跑」。
+> - macOS 分钟数在 Free 套餐的 **private** 仓库里不保证给，本仓库因此是 public。真要私有，就得用自己的 Mac 跑（见第 5 节）。
 
 拿包：
 

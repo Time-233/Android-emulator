@@ -157,6 +157,7 @@ final class BinaryXMLParser {
     }
 
     private func parseStringPool(at base: Int, headerSize: Int, size: Int) throws {
+        guard base + 28 <= data.count else { throw AXMLParserError.truncated }
         let stringCount = Int(data.u32(base + 8))
         let flags = data.u32(base + 16)
         let stringsStart = Int(data.u32(base + 20))
@@ -247,6 +248,7 @@ final class BinaryXMLParser {
     }
 
     private func parseStartElement(at base: Int, headerSize: Int) -> AXMLNode? {
+        guard base + 36 <= data.count else { return nil }
         let nsIndex = Int(data.i32(base + 16))
         let nameIndex = Int(data.i32(base + 20))
         let attributeStart = Int(data.u16(base + 24))
@@ -260,8 +262,8 @@ final class BinaryXMLParser {
         let attributesBase = base + 16 + attributeStart
         var i = 0
         while i < attributeCount {
-            let position = attributesBase + i * attributeSize
-            guard position + 20 <= data.count else { break }
+            let position = attributesBase + i * max(attributeSize, 20)
+            guard position >= 0, position + 20 <= data.count else { break }
             let attrNS = Int(data.i32(position))
             let attrName = Int(data.i32(position + 4))
             let rawValue = Int(data.i32(position + 8))
