@@ -1,4 +1,4 @@
-name: build-ipa
+﻿name: build-ipa
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     name: Build unsigned IPA (iOS 16+)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
 
     steps:
