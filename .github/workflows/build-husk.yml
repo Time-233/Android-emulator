@@ -21,7 +21,7 @@ permissions:
 jobs:
   build:
     name: Husk IPA (${{ inputs.mode }} · ${{ inputs.husk_ref }})
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 350
     env:
       HUSK_REF: ${{ inputs.husk_ref }}
@@ -31,24 +31,32 @@ jobs:
       - name: Checkout build repo
         uses: actions/checkout@v4
 
+      - name: Select newest Xcode
+        run: |
+          set -euo pipefail
+          ls /Applications | grep -i '^Xcode' || true
+          NEWEST="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1)"
+          echo "selected: $NEWEST"
+          if [ -n "$NEWEST" ]; then
+            sudo xcode-select -s "$NEWEST"
+          fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+
       - name: Toolchain
         run: |
           set -euo pipefail
-          xcodebuild -version
-          xcode-select -p
-          sw_vers
-          uname -m
           brew update >/dev/null 2>&1 || true
-          brew install xcodegen qemu meson ninja pkg-config 2>&1 | tail -n 8
+          brew install xcodegen qemu 2>&1 | tail -n 8
           if ! command -v cargo >/dev/null 2>&1; then
             curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
           fi
-          # rustup may be installed by brew or by rustup-init
           export PATH="$HOME/.cargo/bin:$PATH"
           rustup target add aarch64-apple-ios
-          echo "qemu-img: $(command -v qemu-img)"
-          echo "xcodegen: $(command -v xcodegen)"
-          echo "cargo: $(cd . && command -v cargo)"
+          echo "qemu-img : $(command -v qemu-img || echo MISSING)"
+          echo "xcodegen : $(command -v xcodegen || echo MISSING)"
+          echo "cargo    : $(command -v cargo)"
           xcodegen --version
 
       - name: Clone Husk
@@ -69,27 +77,23 @@ jobs:
           ./scripts/fetch_sources.sh
           ./scripts/build_ios.sh libffi glib pixman libucontext libslirp
           cp build/ios-arm64/cross-darwin.meson build/ios-arm64/cross-ios-darwin.meson
-          ./scripts/build_angle_ios.sh || echo "::warning::ANGLE 构建失败，后续会从上游成品取"
+          ./scripts/build_angle_ios.sh || echo "::warning::ANGLE 构建失败，将从上游成品补齐"
           PKG_CONFIG_LIBDIR="$PWD/build/ios-arm64/sysroot/lib/pkgconfig:$PWD/build/ios-arm64/sysroot/share/pkgconfig" \
-            ./scripts/build_gpu_ios.sh || echo "::warning::virglrenderer 构建失败，后续会从上游成品取"
+            ./scripts/build_gpu_ios.sh || echo "::warning::virglrenderer 失败，将从上游成品补齐"
           ./scripts/build_ios.sh qemu
           ./scripts/integrate_husk.sh
           ./scripts/build_ios.sh qemurebuild
           ./scripts/fetch_phase0_guest.sh
-          ./scripts/build_moltenvk_ios.sh || echo "::warning::MoltenVK 失败，后续会从上游成品取"
-          ./scripts/build_ps4_ios.sh || echo "::warning::PS4 层失败，后续会从上游成品取"
+          ./scripts/build_moltenvk_ios.sh || echo "::warning::MoltenVK 失败，将从上游成品补齐"
+          ./scripts/build_ps4_ios.sh || echo "::warning::PS4 层失败，将从上游成品补齐"
 
       - name: Harvest native artifacts from upstream release
         if: inputs.mode == 'app'
-        run: |
-          set -euo pipefail
-          bash husk-build/harvest_upstream.sh husk
+        run: bash husk-build/harvest_upstream.sh husk
 
       - name: Fill gaps from upstream release
         if: inputs.mode == 'full'
-        run: |
-          set -euo pipefail
-          bash husk-build/harvest_upstream.sh husk --only-missing
+        run: bash husk-build/harvest_upstream.sh husk --only-missing
 
       - name: Build rppairing (Rust) + package IPA
         run: |
@@ -105,15 +109,21 @@ jobs:
       - name: Summarise
         if: always()
         run: |
+          shopt -s nullglob
           {
             echo "### Husk $HUSK_REF ($MODE)"
             echo ""
-            echo "- commit: \`$HUSK_COMMIT\`"
-            echo "- runner: macOS $(sw_vers -productVersion) / $(uname -m)"
-            for f in out/*.ipa out/*.tipa; do
-              [ -f "$f" ] && echo "- \`$(basename "$f")\` $(du -h "$f" | cut -f1) sha256=\`$(shasum -a 256 "$f" | cut -d' ' -f1)\`"
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "- commit: \`${HUSK_COMMIT:-?}\`"
+            echo "- runner: macOS $(sw_vers -productVersion) / $(uname -m) / $(xcodebuild -version | head -1)"
+            files=(out/*.ipa out/*.tipa)
+            if [ ${#files[@]} -eq 0 ]; then
+              echo "- 没有产物"
+            else
+              for f in "${files[@]}"; do
+                echo "- \`$(basename "$f")\` $(du -h "$f" | cut -f1) sha256=\`$(shasum -a 256 "$f" | cut -d' ' -f1)\`"
+              done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Upload IPA
         if: success()
