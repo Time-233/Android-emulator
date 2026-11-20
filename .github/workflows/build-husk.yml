@@ -1,0 +1,138 @@
+name: build-husk
+
+on:
+  workflow_dispatch:
+    inputs:
+      husk_ref:
+        description: "Husk 的 tag / 分支 / commit"
+        default: "3.4"
+        required: true
+      mode:
+        description: "app = 应用层源码编译（原生核取上游成品，快）；full = 原生核也全部交叉编译（慢，可能失败）"
+        default: "app"
+        type: choice
+        options:
+          - app
+          - full
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Husk IPA (${{ inputs.mode }} · ${{ inputs.husk_ref }})
+    runs-on: macos-15
+    timeout-minutes: 350
+    env:
+      HUSK_REF: ${{ inputs.husk_ref }}
+      MODE: ${{ inputs.mode }}
+
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcode-select -p
+          sw_vers
+          uname -m
+          brew update >/dev/null 2>&1 || true
+          brew install xcodegen qemu meson ninja pkg-config 2>&1 | tail -n 8
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          fi
+          # rustup may be installed by brew or by rustup-init
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup target add aarch64-apple-ios
+          echo "qemu-img: $(command -v qemu-img)"
+          echo "xcodegen: $(command -v xcodegen)"
+          echo "cargo: $(cd . && command -v cargo)"
+          xcodegen --version
+
+      - name: Clone Husk
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/Leviidev/Husk.git husk
+          cd husk
+          git checkout --quiet "$HUSK_REF"
+          echo "building $(git log -1 --format='%h %s')"
+          echo "HUSK_COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build native cores from source (mode=full)
+        if: inputs.mode == 'full'
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cd husk
+          ./scripts/fetch_sources.sh
+          ./scripts/build_ios.sh libffi glib pixman libucontext libslirp
+          cp build/ios-arm64/cross-darwin.meson build/ios-arm64/cross-ios-darwin.meson
+          ./scripts/build_angle_ios.sh || echo "::warning::ANGLE 构建失败，后续会从上游成品取"
+          PKG_CONFIG_LIBDIR="$PWD/build/ios-arm64/sysroot/lib/pkgconfig:$PWD/build/ios-arm64/sysroot/share/pkgconfig" \
+            ./scripts/build_gpu_ios.sh || echo "::warning::virglrenderer 构建失败，后续会从上游成品取"
+          ./scripts/build_ios.sh qemu
+          ./scripts/integrate_husk.sh
+          ./scripts/build_ios.sh qemurebuild
+          ./scripts/fetch_phase0_guest.sh
+          ./scripts/build_moltenvk_ios.sh || echo "::warning::MoltenVK 失败，后续会从上游成品取"
+          ./scripts/build_ps4_ios.sh || echo "::warning::PS4 层失败，后续会从上游成品取"
+
+      - name: Harvest native artifacts from upstream release
+        if: inputs.mode == 'app'
+        run: |
+          set -euo pipefail
+          bash husk-build/harvest_upstream.sh husk
+
+      - name: Fill gaps from upstream release
+        if: inputs.mode == 'full'
+        run: |
+          set -euo pipefail
+          bash husk-build/harvest_upstream.sh husk --only-missing
+
+      - name: Build rppairing (Rust) + package IPA
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          mkdir -p out
+          cd husk
+          ./scripts/build_rppairing_ios.sh
+          ./scripts/package_ipa.sh "$GITHUB_WORKSPACE/out/Husk-$HUSK_REF.ipa"
+          ./scripts/package_ipa.sh --trollstore "$GITHUB_WORKSPACE/out/Husk-$HUSK_REF.tipa"
+          ls -lh "$GITHUB_WORKSPACE"/out
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "### Husk $HUSK_REF ($MODE)"
+            echo ""
+            echo "- commit: \`$HUSK_COMMIT\`"
+            echo "- runner: macOS $(sw_vers -productVersion) / $(uname -m)"
+            for f in out/*.ipa out/*.tipa; do
+              [ -f "$f" ] && echo "- \`$(basename "$f")\` $(du -h "$f" | cut -f1) sha256=\`$(shasum -a 256 "$f" | cut -d' ' -f1)\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Husk-${{ inputs.husk_ref }}-${{ inputs.mode }}
+          path: |
+            out/*.ipa
+            out/*.tipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: husk-build-logs
+          path: |
+            /tmp/husk_ipa/build.log
+            husk/build/logs/**
+          if-no-files-found: ignore
+          retention-days: 7
