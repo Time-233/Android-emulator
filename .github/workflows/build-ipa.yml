@@ -1,0 +1,87 @@
+name: build-ipa
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build unsigned IPA (iOS 16+)
+    runs-on: macos-14
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcode-select -p
+          sw_vers
+
+      - name: Install XcodeGen
+        run: |
+          brew update >/dev/null 2>&1 || true
+          brew install xcodegen
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build (no code signing)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project DroidBox.xcodeproj \
+            -scheme DroidBox \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            build 2>&1 | tee build.log | tail -n 200
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP="build/Build/Products/Release-iphoneos/DroidBox.app"
+          test -d "$APP" || { echo "缺少 $APP"; ls -R build/Build/Products | head -50; exit 1; }
+          rm -rf out && mkdir -p out/Payload
+          cp -R "$APP" out/Payload/
+          rm -rf out/Payload/DroidBox.app/_CodeSignature
+          rm -f out/Payload/DroidBox.app/embedded.mobileprovision
+          cd out
+          zip -qry DroidBox-unsigned.ipa Payload
+          ls -lh DroidBox-unsigned.ipa
+          echo "sha256=$(shasum -a 256 DroidBox-unsigned.ipa | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
+          echo "### IPA 已生成" >> "$GITHUB_STEP_SUMMARY"
+          echo "- $(du -h DroidBox-unsigned.ipa | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+          unzip -l DroidBox-unsigned.ipa | head -20 >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DroidBox-unsigned-ipa
+          path: out/DroidBox-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: |
+            build.log
+          if-no-files-found: ignore
+          retention-days: 7

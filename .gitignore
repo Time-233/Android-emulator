@@ -1,0 +1,25 @@
+# macOS / Xcode
+.DS_Store
+build/
+DerivedData/
+*.xcworkspace
+xcuserdata/
+*.xcuserstate
+DroidBox.xcodeproj
+
+# 生成物
+out/
+Payload/
+*.ipa
+*.dSYM
+node_modules/
+frame-test.png
+
+# Python
+__pycache__/
+*.pyc
+bridge/.venv/
+
+# 本地私密
+*.local.json
+.secrets
