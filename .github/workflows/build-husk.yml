@@ -87,6 +87,12 @@ jobs:
           ./scripts/build_moltenvk_ios.sh || echo "::warning::MoltenVK 失败，将从上游成品补齐"
           ./scripts/build_ps4_ios.sh || echo "::warning::PS4 层失败，将从上游成品补齐"
 
+      - name: Cache upstream release IPA
+        uses: actions/cache@v4
+        with:
+          path: /tmp/husk-upstream
+          key: husk-upstream-${{ inputs.husk_ref }}
+
       - name: Harvest native artifacts from upstream release
         if: inputs.mode == 'app'
         run: bash husk-build/harvest_upstream.sh husk
@@ -94,6 +100,24 @@ jobs:
       - name: Fill gaps from upstream release
         if: inputs.mode == 'full'
         run: bash husk-build/harvest_upstream.sh husk --only-missing
+
+      - name: Raise app deployment target
+        run: |
+          # 上游用 iOS 15.5 作 app 的部署目标，但 ProfileView 用到的 ViewBuilder.buildIf
+          # 在 SDK 26 里标成了 iOS 16+，Xcode 26 会直接报错。目标机是 iOS 27，抬到 17.0 没有副作用。
+          cd husk
+          python3 - <<'PY'
+          import pathlib
+          path = pathlib.Path("src/app/project.yml")
+          text = path.read_text()
+          old = 'iOS: "15.5"'
+          if old in text:
+              path.write_text(text.replace(old, 'iOS: "17.0"'))
+              print("deployment target 15.5 -> 17.0")
+          else:
+              print("already raised or not found:", old)
+          PY
+          grep -n 'iOS:' src/app/project.yml || true
 
       - name: Build rppairing (Rust) + package IPA
         run: |
