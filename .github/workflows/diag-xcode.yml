@@ -1,0 +1,24 @@
+name: diag-xcode
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - name: Probe toolchain
+        run: |
+          echo "runner=${{ matrix.os }} arch=$(uname -m)"
+          ls /Applications | grep -i '^Xcode' || true
+          xcodebuild -version || true
+          xcrun --sdk iphoneos --show-sdk-version || true
+          for a in /Applications/Xcode*.app; do
+            v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$a/Contents/Info.plist" 2>/dev/null || echo '?')
+            echo "$a -> $v"
+          done
