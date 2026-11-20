@@ -1,4 +1,4 @@
-﻿import SwiftUI
+import SwiftUI
 
 struct RemoteScreenView: View {
     @ObservedObject var session: RemoteSession
@@ -177,7 +177,7 @@ struct RemoteScreenView: View {
                 } else {
                     let a = norm(start)
                     let b = norm(end)
-                    let duration = max(80, min(1200, Int(value.timeInterval * 1000)))
+                    let duration = max(90, min(1200, Int(distance * 1.6)))
                     session.swipe(nx1: a.0, ny1: a.1, nx2: b.0, ny2: b.1, duration: duration)
                 }
             }
